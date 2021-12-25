@@ -1,0 +1,300 @@
+#include <ESP8266WiFi.h>
+#include <SimpleTimer.h>
+#include <MySQL_Connection.h>
+#include <MySQL_Cursor.h>
+#include <SimpleTimer.h>
+
+SimpleTimer updatetimer;
+
+#include <LiquidCrystal.h>
+const int rs = D0, en = D1, d4 = D2, d5 = D3, d6 = D4, d7 = D5;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+IPAddress server_addr(95, 216, 246, 143); 
+char user[] = "ictrlinn_microst";              
+char password[] = "microemb@1411";
+
+
+char ssid[] = "project";         
+char pass[] = "project1234";     
+
+WiFiClient client;                 
+MySQL_Connection conn(&client);
+MySQL_Cursor* cursor;
+
+String hosp1;
+String hosp2;
+String hosp3;
+String hosp4;
+String rtemperature;
+String rlevel="NORMAL";
+
+char tempraturevalue[10] ;
+char levelvalue[10];
+
+
+char UPDATE_SQL[] = "UPDATE ictrlinn_microembdb.sanitzerdispenser SET `level`='%s'" ;
+char query[258];
+
+
+float TempF;
+
+#include <DallasTemperature.h>
+#include <OneWire.h>
+#define ONE_WIRE_BUS 13   
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);           
+float temperature;
+float Ftemperature;
+
+int irpin = D6;
+int irdata;
+
+int levelpin = A0;
+int leveldata;
+
+char retquery[] = "SELECT `data` FROM ictrlinn_microembdb.sanitzerdispenser WHERE 1";
+String gotvalue;
+
+int relayonstatus = 0;
+int buzzerpin=D8;
+
+
+
+void setup()
+{
+  Serial.begin(9600);
+  
+  pinMode(irpin, INPUT);
+  pinMode(levelpin, INPUT);
+  pinMode(buzzerpin,OUTPUT);
+
+  Serial.printf("\nConnecting to %s", ssid);
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+ Serial.println("\nConnected to network");
+ Serial.print("My IP address is: ");
+  Serial.println(WiFi.localIP());
+
+  while (conn.connect(server_addr, 3306, user, password) != true) {
+    delay(200);
+    Serial.print ( "." );
+  }
+
+  lcd.begin(16, 2);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("IoT SANITIZER");
+  lcd.setCursor(0, 1);
+  lcd.print("DISPENSER INFO");
+  delay(2000);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("KEEP HAND AT IR");
+  lcd.setCursor(0, 1);
+  lcd.print("LEVEL:");
+  lcd.print(rlevel);
+
+}
+
+void loop()
+{
+ 
+  irdata = digitalRead(irpin);
+  
+  if (irdata == 0) {
+    if (relayonstatus == 0) {
+       getTemperatureval();
+   if (TempF > 100) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("TEMP:");
+    lcd.print(TempF);
+    lcd.print(" Fah");
+    delay(2000);
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("HIGH TEMPERATURE");
+    lcd.setCursor(0, 1);
+    lcd.print("KINDLY CHECK");
+     delay(2000);
+    buzzering();
+    lcd.print("PLEASE GET");
+    lcd.setCursor(0, 1);
+    lcd.print("KINDLY CHECK");
+    delay(2000);
+    selectquery();
+  }
+   
+  else{     
+      if (leveldata <  900) {
+        relayonstatus = 1;
+        
+        Serial.print("#0");
+        delay(1000);
+        relayonstatus = 0;
+      }
+     else {
+      
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("  SANITIZER  ");
+      lcd.setCursor(0, 1);
+      lcd.print(" LOW LEVEL ");
+      buzzering();
+      delay(2000);
+   
+    }
+    }
+    }
+  }
+}
+
+
+
+
+
+void updatelevel() {
+  leveldata = analogRead(levelpin);
+ 
+  if (  leveldata > 100 &&   leveldata < 449) {
+   
+    rlevel="HIGH";
+  }
+  else  if (  leveldata > 450 &&   leveldata < 899) {
+   
+     rlevel="MEDIUM";
+  }
+  if (  leveldata >  900) {
+   
+    rlevel="LOW";
+  }
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("KEEP HAND AT IR");
+  lcd.setCursor(0, 1);
+  lcd.print("LEVEL:");
+  lcd.print(rlevel);
+  rlevel.toCharArray(levelvalue, rlevel.length()+1);
+  updatequery();
+  delay(500);
+}
+
+void updatequery(){
+  sprintf(query, UPDATE_SQL,levelvalue);
+  
+
+  
+  MySQL_Cursor *cur_mem = new MySQL_Cursor(&conn);
+
+  if (conn.connected()) {
+    cur_mem ->execute(query);
+  }
+  delete cur_mem;
+}
+void getTemperatureval() {
+
+  sensors.requestTemperatures();
+  temperature = sensors.getTempCByIndex(0);
+  
+  TempF = (temperature * 1.8) + 32;
+  
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("TEMP:");
+  lcd.print(TempF);
+  lcd.print(" Fah");
+  
+  
+
+}
+
+
+void selectquery() {
+
+  Serial.println("\nRunning SELECT and printing results\n");
+
+  MySQL_Cursor *cur_mem = new MySQL_Cursor(&conn);
+ 
+  cur_mem->execute(retquery);
+ 
+  column_names *cols = cur_mem->get_columns();
+  for (int f = 0; f < cols->num_fields; f++) {
+    Serial.print(cols->fields[f]->name);
+    if (f < cols->num_fields - 1) {
+      Serial.print(", ");
+    }
+  }
+  Serial.println();
+
+  row_values *row = NULL;
+  do {
+    row = cur_mem->get_next_row();
+    if (row != NULL) {
+      for (int f = 0; f < cols->num_fields; f++) {
+       
+        char* hospitalinfo = row->values[f];
+    
+        gotvalue = String(hospitalinfo);
+       
+        if (f < cols->num_fields - 1) {
+        
+        }
+      }
+     
+    }
+  } while (row != NULL);
+
+ 
+  delete cur_mem;
+
+  hosptialseg();
+}
+
+void hosptialseg() {
+
+  hosp1 = getValue(gotvalue, ',', 0);      
+  hosp2 = getValue(gotvalue, ',', 1);       
+  hosp3 = getValue(gotvalue, ',', 2);       
+  hosp4 = getValue(gotvalue, ',', 3);       
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(hosp1);
+  lcd.setCursor(0, 1);
+  lcd.print(hosp2);
+  delay(3000);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(hosp3);
+  lcd.setCursor(0, 1);
+  lcd.print(hosp4);
+  delay(3000);
+}
+
+String getValue(String data, char separator, int index)
+{
+  int found = 0;
+  int strIndex[] = { 0, -1 };
+  int maxIndex = data.length() - 1;
+
+  for (int i = 0; i <= maxIndex && found <= index; i++) {
+    if (data.charAt(i) == separator || i == maxIndex) {
+      found++;
+      strIndex[0] = strIndex[1] + 1;
+      strIndex[1] = (i == maxIndex) ? i + 1 : i;
+    }
+  }
+  return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
+
+void buzzering(){
+  digitalWrite(buzzerpin,1);
+  delay(1000);
+  digitalWrite(buzzerpin,0);
+}
